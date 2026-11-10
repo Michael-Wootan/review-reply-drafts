@@ -1,0 +1,58 @@
+name: Review reply drafts
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Monday 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print drafts to the log only, do not email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  draft:
+    name: Draft replies and email them for review
+    # Scheduled runs are off until the repository variable ENABLE_SCHEDULE is 'true',
+    # so a fresh fork or an unconfigured copy never runs (or fails) on its own.
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_SCHEDULE == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - run: python scripts/test_drafts.py
+
+      # config/tone_guidance.md is gitignored; CI writes it from a repository variable
+      - name: Write tone guidance
+        env:
+          TONE_GUIDANCE: ${{ vars.TONE_GUIDANCE }}
+        run: |
+          if [ -n "$TONE_GUIDANCE" ]; then printf '%s' "$TONE_GUIDANCE" > config/tone_guidance.md; fi
+
+      - name: Generate drafts and send email
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ vars.EMAIL_TO }}
+          REVIEW_DOMAIN: ${{ vars.REVIEW_DOMAIN }}
+          COMPANY_NAME: ${{ vars.COMPANY_NAME }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: python src/reply_to_reviews.py
